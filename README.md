@@ -1310,7 +1310,18 @@ def _known_qmt_python_dir():
 
 **方式 A：用兼容层（推荐，旧代码零改动）**
 
-客户端创建配置文件 `bigqmt_signal_trader_client_config.py`（与上面类似但用客户端视角），然后：
+客户端创建配置文件 `bigqmt_signal_trader_client_config.py`（与上面类似但用客户端视角）。
+
+**放哪、怎么被找到：** 客户端是靠 `import bigqmt_signal_trader_client_config` 找它的，
+所以它必须在 `sys.path` 上——最省事是**和你运行的脚本放同一目录**（`python xxx.py` 时脚本
+所在目录自动排在 `sys.path` 最前）；交互式或 `python -c` 时是**当前工作目录**。放在别处就
+把那个目录加进 `PYTHONPATH`，或用环境变量 `BIGQMT_CLIENT_CONFIG_MODULE=<模块名>` 指定。
+
+找不到时会退回 `bigqmt_signal_trader_local_config`（服务端那份）。所以把它放进 QMT 的
+`python` 目录、并从那个目录运行客户端也能跑——但那是碰巧命中回退，读到的是服务端配置，
+换台机器就找不到了。客户端和 QMT 不在同一台机器时，配置只能跟着客户端脚本走。
+
+然后：
 
 ```python
 from bigqmt_signal_trader.xtquant_compat import StockAccount, configure, xt_trader, xtdata
