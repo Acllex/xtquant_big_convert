@@ -31,6 +31,7 @@ from xtquant.xttype import StockAccount
 from .full_tick_cache import request_full_tick_cache, wait_full_tick_cache
 from .local_cache import LocalMarketCache
 from .order_id import OrderId, order_sys_id_of
+from .option_order_type import option_order_type
 from .redis_rpc import TYPED_PAYLOAD_FLAG, call_redis_rpc
 from .logging_setup import get_logger
 
@@ -3218,8 +3219,32 @@ class BigQmtXtData:
         # 签名一致；大 QMT 那边这个调用没有增量参数，服务端按全量下载处理。
         return self._call("download_history_contracts")
 
-    def get_option_list(self, undl_code, dedate, opttype="", isavailavle=False):
-        return self._call("get_option_list", undl_code=undl_code, dedate=dedate, opttype=opttype, isavailavle=isavailavle)
+    def get_option_list(
+        self,
+        undl_code,
+        dedate,
+        opttype="",
+        isavailavle=None,
+        available=None, # fix typo
+    ):
+        if (
+            available is not None
+            and isavailavle is not None
+            and bool(isavailavle) != bool(available)
+        ):
+            raise ValueError("isavailavle and available must not conflict")
+        selected_available = (
+            bool(available)
+            if available is not None
+            else bool(isavailavle) if isavailavle is not None else False
+        )
+        return self._call(
+            "get_option_list",
+            undl_code=undl_code,
+            dedate=dedate,
+            opttype=opttype,
+            isavailavle=selected_available,
+        )
 
     def get_his_option_list(self, undl_code, dedate):
         return self._call("get_his_option_list", undl_code=undl_code, dedate=dedate)
@@ -3460,6 +3485,14 @@ class BigQmtXtData:
 
     def get_option_detail_data(self, stockcode):
         return self._call("get_option_detail_data", stockcode=stockcode)
+
+    def get_option_detail_data_batch(self, stockcodes, timeout_seconds=300.0):
+        """Fetch many option details in one RPC; QMT loops over the codes."""
+        return self.client.call(
+            "get_option_detail_data_batch",
+            {"stockcodes": list(stockcodes)},
+            timeout_seconds=timeout_seconds,
+        ) or {}
 
     def get_option_undl_data(self, undl_code_ref=""):
         return self._call("get_option_undl_data", undl_code_ref=undl_code_ref)
@@ -4372,6 +4405,7 @@ class BigQmtXtTrader:
             and self._account_cache_usable(account_id, "query_stock_asset(empty)") is not None
         ):
             data = self._cached_asset(account_id) or data
+        fetch_balance = _safe_float(data.get("fetch_balance"), None)
         cash = data.get("cash")
         total_asset = data.get("total_asset")
         frozen_cash = data.get("frozen_cash")
@@ -4391,6 +4425,8 @@ class BigQmtXtTrader:
             account_type=self._account_type_value(),
             cash=_safe_float(cash, 0.0) if cash is not None else None,
             available_cash=_safe_float(cash, 0.0) if cash is not None else None,
+            fetch_balance=fetch_balance,
+            m_dFetchBalance=fetch_balance,
             # MiniQMT's XtAsset always exposes frozen_cash, so default to 0.0
             # rather than None: callers do arithmetic on it.
             frozen_cash=_safe_float(frozen_cash, 0.0) if frozen_cash is not None else 0.0,
@@ -6153,7 +6189,8 @@ class BigQmtXtTrader:
 
     def _order_from_dict(self, account_id, item):
         action = item.get("action")
-        order_type = _action_to_order_type(action)
+        order_type = (option_order_type(item.get("direction"), item.get("offset_flag"), action)
+                      if self._account_type_value(item) == 6 else _action_to_order_type(action))
         order_sysid = str(item.get("order_sys_id") or item.get("order_sysid") or item.get("order_id") or "")
         return CompatObject(
             account_id=account_id,
@@ -6199,7 +6236,8 @@ class BigQmtXtTrader:
 
     def _trade_from_dict(self, account_id, item):
         action = item.get("action")
-        order_type = _action_to_order_type(action)
+        order_type = (option_order_type(item.get("direction"), item.get("offset_flag"), action)
+                      if self._account_type_value(item) == 6 else _action_to_order_type(action))
         order_sysid = str(item.get("order_sys_id") or item.get("order_sysid") or "")
         trade_id = str(item.get("trade_id") or "")
         traded_volume = _safe_int(item.get("volume", item.get("traded_volume")))
