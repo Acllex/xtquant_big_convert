@@ -18,11 +18,7 @@
 
 ### 讨论组：微信群「qmt 交流群」
 
-**群人数已超过 200，微信不再支持扫码进群，需要手动拉。** 扫下面这张加我，我拉你进去：
-
-<img src="docs/assets/wechat-contact-qr.jpg" alt="加作者微信，手动拉进 qmt 交流群" width="320">
-
-> 加好友时备注一下「qmt」，方便我认出来。这张是个人二维码，不会过期。
+**群人数快满 500 人了，不再加新成员，感谢理解。** 群里沉淀了不少踩坑讨论，但检索不到 —— 所以：
 
 提 bug 和功能请求请走 [issue](https://github.com/litaolemo/xtquant_big_convert/issues)：群里的讨论不会被检索到，而 issue 会 —— 下一个遇到同样问题的人能搜到。
 
