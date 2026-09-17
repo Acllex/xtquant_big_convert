@@ -58,8 +58,10 @@ del _const_name
 # ``openInterest`` for K-lines.  Cache fills deliberately use a bounded subset
 # instead, but omitting those two standard fields leaves the resulting frame
 # observably incompatible with MiniQMT consumers.
+# preClose: 下游策略(涨停解析/prepare_data等)按 MiniQMT 口径取 preClose 算涨跌幅, 缺列即 KeyError
 DEFAULT_DOWNLOAD_FIELDS = [
     "time", "open", "high", "low", "close", "volume", "amount", "openInterest",
+    "preClose",
 ]
 # Codes per get_market_data_ex request. One request carries a single RPC timeout,
 # so a wide stock_list either fits or loses everything (issue #47).
@@ -1047,11 +1049,41 @@ def _normalize_market_data_frame(df, field_list=None):
         return df
 
 
+def _ensure_preclose_from_lag(df):
+    """preClose 行级兜底: 该列缺失/为0 且当日 close 有效时, 用前收 lag 补。
+
+    big QMT 对正常股票返回真实 preClose; 但 (a) 早期本地缓存文件缺该列,
+    (b) 个别行可能为0。除权除息日 lag(前收) 与官方 preClose 略有偏差, 可接受。
+    """
+    try:
+        if not hasattr(df, "columns") or "close" not in df.columns:
+            return df
+        close = df["close"]
+        valid_close = close.notna() & (close > 0)
+        lag = close.shift(1)
+        fill = lag.where(lag.notna() & (lag > 0), close)
+        if "preClose" not in df.columns:
+            # 停牌/无数据帧也保证列存在(填0), 与 MiniQMT 行为一致, 避免下游 KeyError
+            out = df.copy()
+            out["preClose"] = fill.where(valid_close, 0)
+            return out
+        if not bool(valid_close.any()):
+            return df
+        bad = (df["preClose"].isna() | (df["preClose"] == 0)) & valid_close
+        if not bool(bad.any()):
+            return df
+        out = df.copy()
+        out.loc[bad, "preClose"] = fill[bad]
+        return out
+    except Exception:
+        return df
+
+
 def _normalize_market_data_result(data, field_list=None):
     if not isinstance(data, dict):
-        return data
+        return _ensure_preclose_from_lag(data)
     return {
-        code: _normalize_market_data_frame(frame, field_list=field_list)
+        code: _ensure_preclose_from_lag(_normalize_market_data_frame(frame, field_list=field_list))
         for code, frame in data.items()
     }
 
@@ -2624,7 +2656,9 @@ class BigQmtXtData:
                         end_time=end_time, dividend_type=dividend_type,
                     )
                 data = payload.get(single) if single is not None else payload
-            return data
+            if isinstance(data, dict):
+                return {code: _ensure_preclose_from_lag(frame) for code, frame in data.items()}
+            return _ensure_preclose_from_lag(data)
         fields = list(field_list or [])
         result = {}
         missing = []
@@ -2643,7 +2677,7 @@ class BigQmtXtData:
                 df = fetched.get(code)
                 if df is not None and getattr(df, "shape", (0,))[0] > 0:
                     result[code] = self._select_fields(
-                        _normalize_market_data_frame(df, field_list=fields),
+                        _ensure_preclose_from_lag(_normalize_market_data_frame(df, field_list=fields)),
                         fields,
                     )
         return result
