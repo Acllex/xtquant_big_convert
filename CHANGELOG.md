@@ -3,9 +3,16 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
 
-## [未发布]
+## [0.3.50] - 2026-09-21
 
 ### 修复
+
+- **`connect()` 失败现在先拆掉事件监听再抛错**（@litaolemo）。`start()` 拉起的事件监听线程
+  持有 Redis pubsub 订阅（每实例 4 个 exec 事件频道），`connect()` 失败直接抛错时监听不拆、
+  实例被丢弃后订阅**永久留在服务端**——调用方重连风暴每次重试泄漏一个，实测单日 8000+ 个
+  subscribe 连接，逼近 maxclients 后整个 Redis 拒绝新连接。现在失败路径先 `stop()`（只拆线程
+  和排空异步单，不碰调用方的 redis 客户端）再抛原异常；失败后原地重试成功的话，监听由后续
+  `start()` / `subscribe()` 重新拉起。
 
 - **`download_history_data2`：服务端下载失败、客户端拉取又拉到 0 行时不再报 `{finished: total}`**（#339，@yucejade）。
   开了本地缓存时服务端下载一直是"尽力而为"——服务端本来就有的数据，后面的拉取能救回来。但拉取
