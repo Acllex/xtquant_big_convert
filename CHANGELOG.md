@@ -3,6 +3,19 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
 
+## [0.3.64] - 2026-10-10
+
+### 修复
+
+- **`get_instrument` 在终端合约库被污染的机器上对齐 miniQMT 的正确值**（#405 的条件性缓解，
+  @yucejade 报告并贡献 PR #407）。终端侧 `ContextInfo.get_instrumentdetail` 的合约库在个别机器上
+  被污染且重启不自愈（`OpenDate` 返回 0 或借壳/更名日），而同机常驻登录的 miniQMT 行情服务对同批
+  代码全部正确。`get_instrument` 改走既有 `_native_or_context` 模式：native SDK 优先、ContextInfo
+  回落、#160 死标记窗口吸收拨号成本，开关沿用 `native_xtdata_enabled`（redis 传输默认开）。
+  **局限（重要）**：只有同机常驻登录 miniQMT 的部署才受益；没有 miniQMT 的部署行为不变（native
+  拨号失败即回落，每 600 秒窗口付一次拨号成本）。#405 的根治（终端合约库为何被污染、如何刷新）
+  仍开着。
+
 ## [0.3.63] - 2026-10-10
 
 ### 修复
