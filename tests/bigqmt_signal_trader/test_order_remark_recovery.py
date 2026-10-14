@@ -3,8 +3,10 @@
 Only an isolated Unix socket is used; no terminal, credentials or trades.
 """
 import datetime
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import time
@@ -12,6 +14,11 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+
+# Same preamble as every other suite module: the repo's src wins over any
+# installed copy, which may predate the module under test.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 
 redis = pytest.importorskip("redis")
 try:
@@ -47,15 +54,21 @@ def redis_socket(tmp_path_factory):
             try:
                 if client.ping():
                     break
-            except redis.ConnectionError:
+            except (redis.ConnectionError, AttributeError, OSError):
+                # AttributeError: Windows has no socket.AF_UNIX for the unix
+                # socket; OSError: the Windows redis-server cannot bind one.
                 time.sleep(0.02)
         else:
-            pytest.fail("isolated Redis did not start")
+            proc.terminate()
+            proc.wait(timeout=3)
+            temporary.cleanup()
+            pytest.skip("isolated Redis unix socket unavailable on this platform")
         yield socket
     finally:
         client.close()
-        proc.terminate()
-        proc.wait(timeout=3)
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=3)
         temporary.cleanup()
 
 
