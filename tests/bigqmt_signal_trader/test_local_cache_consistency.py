@@ -150,7 +150,7 @@ def test_cache_only_hit_and_miss_never_call_terminal(tmp_path):
     assert set(result) == {"X"}
 
 
-def test_automatic_cache_write_failure_is_logged_without_losing_rpc_data(tmp_path, caplog):
+def test_automatic_cache_write_failure_is_logged_without_losing_rpc_data(tmp_path):
     data = _client(tmp_path)
     frame = pd.DataFrame({"close": [10.]}, index=["20260930150000"])
     data._get_market_data_ex_batch = lambda *a, **k: {"X": frame}
@@ -158,11 +158,24 @@ def test_automatic_cache_write_failure_is_logged_without_losing_rpc_data(tmp_pat
     def failed(*args, **kwargs):
         raise OSError("disk full")
 
+    # The project's loggers set propagate=False (logging_setup), so caplog's
+    # root handler sees nothing; attach to the logger the warning fires on.
+    import logging
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    logger = logging.getLogger("bigqmt.xtquant_compat")
+    logger.addHandler(handler)
+
     data._local_cache().write = failed
-    result = data.get_market_data_ex(stock_list=["X"], period="5m", subscribe=False,
-                                     backfill_pre_close=False, resynth_ongoing_multiday=False)
+    try:
+        result = data.get_market_data_ex(stock_list=["X"], period="5m", subscribe=False,
+                                         backfill_pre_close=False, resynth_ongoing_multiday=False)
+    finally:
+        logger.removeHandler(handler)
     assert result["X"] is frame
-    assert "local cache write failed code=X period=5m: disk full" in caplog.text
+    assert any("local cache write failed code=X period=5m: disk full" in r.getMessage()
+               for r in records)
 
 
 @pytest.mark.parametrize("failure", ["read", "merge"])
