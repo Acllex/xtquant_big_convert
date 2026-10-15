@@ -478,6 +478,91 @@ def normalize_order_event(order, account_id=""):
 
 ORDER_IDENTITY_TTL_SECONDS = 7 * 86400
 
+# QMT's bundled Redis checks responses for stock-code/operation digit
+# patterns. Raw identity JSON contains both (#393). Keep keys and decoded
+# fields unchanged, but store values using an alphabet with no digits.
+_ORDER_IDENTITY_PREFIX = "bqidentity:"
+_IDENTITY_DIGIT_ENCODE = str.maketrans("0123456789", "ghijklmnop")
+_IDENTITY_DIGIT_DECODE = str.maketrans("ghijklmnop", "0123456789")
+_last_identity_warning = -float("inf")
+
+# An old JSON value can be rejected before Python receives it. Migrate that
+# one key inside Redis, returning only the safe representation. SETRANGE
+# preserves its exact expiry (including no expiry); the encoded value is
+# always longer, so no old suffix survives. Do not re-serialize with cjson:
+# preserving the original bytes also preserves timestamp precision.
+_MIGRATE_ORDER_IDENTITY = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return false end
+local prefix = ARGV[3]
+if string.sub(raw, 1, #prefix) == prefix then return raw end
+local ok, identity = pcall(cjson.decode, raw)
+if not ok or type(identity) ~= 'table'
+        or identity.account_id ~= ARGV[1]
+        or identity.user_order_id ~= ARGV[2] then
+    return false
+end
+local alphabet = 'ghijklmnopabcdef'
+local parts = {prefix}
+for i = 1, #raw do
+    local value = string.byte(raw, i)
+    local high = math.floor(value / 16) + 1
+    local low = value % 16 + 1
+    parts[#parts + 1] = string.sub(alphabet, high, high)
+    parts[#parts + 1] = string.sub(alphabet, low, low)
+end
+local encoded = table.concat(parts)
+redis.call('SETRANGE', KEYS[1], 0, encoded)
+return encoded
+"""
+
+
+def _encode_order_identity(identity):
+    raw = json.dumps(identity, ensure_ascii=False, default=str).encode("utf-8")
+    return _ORDER_IDENTITY_PREFIX + raw.hex().translate(_IDENTITY_DIGIT_ENCODE)
+
+
+def _decode_order_identity(raw):
+    if not raw:
+        return None
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        if text.startswith(_ORDER_IDENTITY_PREFIX):
+            token = text[len(_ORDER_IDENTITY_PREFIX):]
+            text = bytes.fromhex(token.translate(_IDENTITY_DIGIT_DECODE)).decode("utf-8")
+        identity = json.loads(text)
+        return identity if isinstance(identity, dict) else None
+    except (ValueError, TypeError, UnicodeError):
+        return None
+
+
+def _warn_order_identity(exc):
+    global _last_identity_warning
+    now = time.monotonic()
+    if now - _last_identity_warning >= 60:
+        _last_identity_warning = now
+        print("[bigqmt_rpc] order identity read failed: %s: %s; "
+              "strategy_name may fall back to the QMT process name (#393)"
+              % (exc.__class__.__name__, exc))
+
+
+def _read_order_identity(redis_client, account_id, user_order_id):
+    key = order_identity_key(account_id, user_order_id)
+    try:
+        raw = redis_client.get(key)
+    except Exception as exc:
+        if "Sensitive Data Detected, Forbidden!" not in str(exc):
+            raise
+        migrate = getattr(redis_client, "eval", None)
+        if not callable(migrate):
+            raise RuntimeError(
+                "QMT blocked a legacy order identity and Redis EVAL is unavailable; "
+                "the existing record was preserved (#393)")
+        raw = migrate(_MIGRATE_ORDER_IDENTITY, 1, key,
+                      str(account_id or ""), str(user_order_id or ""),
+                      _ORDER_IDENTITY_PREFIX)
+    return _decode_order_identity(raw)
+
 
 def remember_order_identity(redis_client, account_id, user_order_id, strategy_name="", stock_code="", ttl_seconds=ORDER_IDENTITY_TTL_SECONDS):
     """Record who submitted an order, keyed by the remark it rides out as.
@@ -504,7 +589,7 @@ def remember_order_identity(redis_client, account_id, user_order_id, strategy_na
         "stock_code": str(stock_code or ""),
         "created_at_ts": time.time(),
     }
-    blob = json.dumps(payload, ensure_ascii=False, default=str)
+    blob = _encode_order_identity(payload)
     ttl = int(ttl_seconds or ORDER_IDENTITY_TTL_SECONDS)
     key = order_identity_key(account_id, user_order_id)
     try:
@@ -519,12 +604,13 @@ def remember_order_identity(redis_client, account_id, user_order_id, strategy_na
             return payload
         # The key exists: this remark was used before.
         existing_name = ""
-        raw = redis_client.get(key)
-        if raw:
-            try:
-                existing_name = str((json.loads(raw) or {}).get("strategy_name") or "")
-            except Exception:
-                existing_name = ""
+        existing = _read_order_identity(redis_client, account_id, user_order_id)
+        if existing is None:
+            # An unreadable/mismatched old value is not evidence of an unnamed
+            # submit. Preserve it rather than silently changing ownership.
+            return None
+        if existing:
+            existing_name = str(existing.get("strategy_name") or "")
         new_name = payload["strategy_name"]
         if existing_name:
             if new_name and new_name != existing_name:
@@ -538,8 +624,8 @@ def remember_order_identity(redis_client, account_id, user_order_id, strategy_na
         # The existing record is unnamed; this named submit knows better.
         redis_client.setex(key, ttl, blob)
         return payload
-    except Exception:
-        pass
+    except Exception as exc:
+        _warn_order_identity(exc)
     return payload
 
 
@@ -587,22 +673,21 @@ def order_identity_map(redis_client, account_id, user_order_ids, limit=500):
         except Exception:
             raws = None
     if raws is None:
-        raws = []
-        for key in keys:
+        found = {}
+        for text in wanted:
             try:
-                raws.append(redis_client.get(key))
-            except Exception:
-                raws.append(None)
+                identity = _read_order_identity(redis_client, account_id, text)
+                if identity is not None:
+                    found[text] = identity
+            except Exception as exc:
+                _warn_order_identity(exc)
+        return found
 
     found = {}
     for text, raw in zip(wanted, raws):
-        if not raw:
-            continue
-        try:
-            found[text] = json.loads(
-                raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
-        except Exception:
-            continue
+        identity = _decode_order_identity(raw)
+        if identity is not None:
+            found[text] = identity
     return found
 
 
@@ -613,14 +698,11 @@ def enrich_order_identity(redis_client, account_id, event):
     if not user_order_id:
         return event
     try:
-        raw = redis_client.get(order_identity_key(account_id, user_order_id))
-    except Exception:
-        raw = None
-    if not raw:
+        identity = _read_order_identity(redis_client, account_id, user_order_id)
+    except Exception as exc:
+        _warn_order_identity(exc)
         return event
-    try:
-        identity = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
-    except Exception:
+    if not identity:
         return event
     if identity.get("strategy_name"):
         # The row's strategy-name field carries the QMT-side strategy's
