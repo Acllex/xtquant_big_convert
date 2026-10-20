@@ -2,6 +2,13 @@
 """Reply safety must not change storage or the first named submit's owner."""
 import json
 
+import os
+import sys
+
+# Same preamble as every other suite module: the repo src wins over any
+# installed copy, which may predate the modules under test.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 import pytest
 
 from bigqmt_signal_trader import exec_events, redis_rpc
@@ -34,8 +41,16 @@ def submit(client):
     return handler
 
 
+def _require_acl(real_redis):
+    try:
+        real_redis.execute_command('ACL', 'LIST')
+    except Exception:
+        pytest.skip('redis ACL unsupported on this server (pre-6.0)')
+
+
 def test_denied_setrange_does_not_rename_same_remark_in_local_journal(real_redis):
     import redis
+    _require_acl(real_redis)
     real_redis.execute_command("ACL", "SETUSER", "read-owner", "on", "nopass", "~*", "+@all", "-setrange")
     options = real_redis.connection_pool.connection_kwargs
     limited = redis.Redis(host=options["host"], port=options["port"], username="read-owner",
@@ -61,6 +76,7 @@ def test_denied_setrange_does_not_rename_same_remark_in_local_journal(real_redis
 
 def test_script_error_other_than_wrong_type_uses_the_original_mget(real_redis):
     import redis
+    _require_acl(real_redis)
     real_redis.execute_command("ACL", "SETUSER", "no-get", "on", "nopass", "~*", "+@all", "-get")
     options = real_redis.connection_pool.connection_kwargs
     limited = redis.Redis(host=options["host"], port=options["port"], username="no-get",
