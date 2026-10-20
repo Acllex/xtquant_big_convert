@@ -6,6 +6,13 @@ import re
 import time
 from types import SimpleNamespace
 
+import os
+import sys
+
+# Same preamble as every other suite module: the repo src wins over any
+# installed copy, which may predate the modules under test.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 import pytest
 
 import test_order_identity_safe_storage as vendor
