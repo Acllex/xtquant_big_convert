@@ -2,9 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
-## [Unreleased]
+## [0.3.69] - 2026-10-19
 
 ### 修复
+
+- **pipe 传输在缺 `ctypes.wintypes.HANDLE`/`BOOL` 的券商内置 Python 上直接可用**（#419，
+  @vx0532 报告）：部分 QMT 内置 3.6 裁掉了这两个类型，切管道即 AttributeError。
+  以 c_void_p / c_int32 兜底（与原生同类同宽），完整 build 零变化。
+- **FileIO 禁令沙箱里 loader 的真实错误不再被 UnboundLocalError 掩盖**（#420，
+  @yuchiwang 报告）：`open()` 被拒时 `source` 从未赋值，token 检查反手抛
+  UnboundLocalError；现在先打印真实错误（含模块名与路径）再原样抛出。
 
 - **QMT Redis 响应检查的非数字串回溯变慢**（#423）：仅在 Lua 回复中给安全编码每
   32 个字母插入孤立 `0`，限制连续非数字段且不命中股票模式；备注缺失/冲突回复改为
