@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
+## [0.3.70] - 2026-10-19
+
+### 新增
+
+- **按 sub_ids 批量退订全推订阅**（#418，@shengyy 报告并给出完整设计约束）。退出时逐项
+  退订的累计成本是 N 次 RPC + N-1 次推送订阅者重建（26 项实测约 5 秒未完）。新公开入口
+  `xtdata.unsubscribe_quotes(seqs)`：本地表一次移除、一次 RPC、一次 topic 重同步；服务端
+  只释放本客户端的命名引用（共享组合的同机其它订阅者不受影响，`quote_unsubscribe_all`
+  维持最后手段语义不变），报告 `{released, unknown, native_errors}`——未知 id 与原生
+  退订异常点名上报不再吞掉；replay 快照后已释放的句柄不再被订回。实盘（pipe 部署）：
+  5 订阅批量退订 282ms 完成、服务端组合清零。
+
 ## [0.3.69] - 2026-10-19
 
 ### 修复
