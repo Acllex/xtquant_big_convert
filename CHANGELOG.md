@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
+## [0.3.71] - 2026-10-20
+
+### 修复
+
+- **批量退订回包缺失不再伪造空报告**（#427，@shengyy 审出）。已发出 `unsubscribe_whole_quote_batch`
+  RPC 但回包为 None/非 dict 时，原来补成三项空列表——与"无需退订"完全同形，调用方无法区分
+  服务端是否完成释放。现在抛 RuntimeError 点名"无释放报告、句柄服务端状态未知"，并指向
+  `quote_subscription_status` 核对；无句柄的空调用仍返回空报告不变。
+- **replay 与退订交错不再把已释放句柄订回服务端**（#428，@shengyy 审出）。重放的成员检查与
+  订阅 RPC 刻意不共享锁（RPC 持锁会让所有退订排队），窗口仍在。现在订阅 RPC 返回后复查成员，
+  窗口内被释放的句柄立即补发退订——自愈，不再等心跳超时被 reaper 回收。
+
 ## [0.3.70] - 2026-10-19
 
 ### 新增
