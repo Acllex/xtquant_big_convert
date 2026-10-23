@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
+## [0.3.72] - 2026-10-23
+
+### 修复
+
+- **pipe 模式按线程开的连接随线程退出释放**（#431，@erlou96 报告）。客户端每条线程第一次
+  RPC 时自建一条管道连接，但句柄只随进程退出回收：客户端每死一条线程，服务端白留一条连接
+  （background 模式还搭一个工作线程），churn 场景一路积到 255 个实例上限后，新连接
+  `CreateFileW` 永远 `PIPE_BUSY`——报告里的「内存溢出」实际是服务端的线程/句柄耗尽。现在
+  每条连接按 `(ident, token)` 注册，线程退出时由 thread-local finalizer 即时关闭，新建连接
+  前再兜底清扫死线程残留；ident 与句柄值都会被系统回收复用，释放必须 token 全等，不会错杀
+  复用位上的活连接。
+- **`trader.stop()` 关闭底层 RPC transport**（#431 同案）。原来只排干异步单、停事件线程，
+  transport 实例活到进程退出，守规矩的单线程客户端一样泄漏一条连接。新增
+  `BigQmtRpcClient.close()`（幂等，再使用时惰性重建），`BigQmtXtTrader.stop()` 调用它。
+  实盘（lemo pipe 部署，0.3.71 桥）：6 线程 churn 后注册表零残留，`stop()` 后连接全关。
+
 ## [0.3.71] - 2026-10-20
 
 ### 修复
