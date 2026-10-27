@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和 [语义化版本](https://semver.org/)。
 
+## [0.3.77] - 2026-10-27
+
+### 修复
+
+- **NoopPositionSyncSink 快照无界增长（#441，内存泄漏）**：非 redis 传输回落到
+  Noop sink，publish() 每次追加、永不清理——app.tick() 每个 adjust 拍发布一次
+  （约 10 次/秒），报告者终端实测约 1MB/s 私有内存增长，直到页面文件吃满 C 盘。
+  改为原地保留最新一条（外部引用不变，src 内无历史读取方）。redis 传输用真
+  sink（带 TTL 发布）不受影响。
 ## [0.3.76] - 2026-10-27
 
 ### 修复
